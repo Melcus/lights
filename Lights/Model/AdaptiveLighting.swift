@@ -23,8 +23,7 @@ final class AdaptiveLighting {
         didSet {
             guard isEnabled != oldValue else { return }
             defaults.set(isEnabled, forKey: Keys.enabled)
-            pausedUntil = [:]
-            deliveries = [:]
+            rules = AdaptiveRules()
             update()
         }
     }
@@ -40,7 +39,7 @@ final class AdaptiveLighting {
     var adjustsBrightness: Bool {
         didSet {
             defaults.set(adjustsBrightness, forKey: Keys.adjustsBrightness)
-            deliveries = [:]
+            rules.forgetDeliveries()
             update()
         }
     }
@@ -56,31 +55,13 @@ final class AdaptiveLighting {
 
     private(set) var now = Date()
     private(set) var place = AdaptiveLighting.placeFromTimeZone()
-    private(set) var pausedUntil: [String: Date] = [:]
+    /// Pauses, and what was sent to each light.
+    private(set) var rules = AdaptiveRules()
 
     @ObservationIgnored private unowned let store: LightStore
     @ObservationIgnored private let defaults: UserDefaults
-    /// What was last sent to each light, to tell a lost command or a device limit from a change
-    /// made elsewhere (Control Center, the Govee app, the light's own controls).
-    @ObservationIgnored private var deliveries: [String: Delivery] = [:]
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var notificationObservers: [NSObjectProtocol] = []
-
-    struct Target: Equatable {
-        var kelvin: Int
-        /// nil when brightness isn't adjusted.
-        var brightness: Int?
-    }
-
-    private struct Delivery {
-        /// What was asked for; a new target is sent only once the sun has moved it on.
-        var target: Target
-        /// What the light should report back. Starts as `target`, becomes the light's own values when
-        /// it can't go that far.
-        var expected: Target
-        var sentAt: ContinuousClock.Instant
-        var isRetry: Bool
-    }
 
     private enum Keys {
         static let enabled = "adaptive.enabled"
@@ -143,6 +124,11 @@ final class AdaptiveLighting {
         AdaptiveCurve.brightness(forSolarElevation: place.sun.elevation(at: now), day: dayBrightness, night: nightBrightness)
     }
 
+    /// Percent of each light's maximum, or nil when brightness isn't adjusted.
+    private var brightnessShare: Int? {
+        adjustsBrightness ? targetBrightness : nil
+    }
+
     /// "5500 K at 50%" or just "5500 K".
     var targetSummary: String {
         adjustsBrightness ? "\(targetKelvin) K at \(targetBrightness)%" : "\(targetKelvin) K"
@@ -159,13 +145,15 @@ final class AdaptiveLighting {
         place.sun.sunTimes(around: Self.noon(of: now))
     }
 
+    var pausedUntil: [String: Date] { rules.pausedUntil }
+
     /// Lights showing a colour or a scene were set by hand, so they don't follow.
     func follows(_ light: Light) -> Bool {
-        isEnabled && light.color == nil && light.effect == nil && !isPaused(light)
+        isEnabled && rules.follows(light.state, at: now)
     }
 
     func isPaused(_ light: Light) -> Bool {
-        pausedUntil[light.id].map { $0 > now } ?? false
+        rules.isPaused(light.id, at: now)
     }
 
     /// Targets across the local day, for drawing the daily curves.
@@ -193,91 +181,41 @@ final class AdaptiveLighting {
     /// A change made by hand: step aside until the next sunrise or sunset.
     func userAdjusted(_ light: Light) {
         guard isEnabled else { return }
-        pause(light)
-    }
-
-    func pause(_ light: Light) {
         now = .now
-        pausedUntil[light.id] = nextSunEvent()
-        deliveries[light.id] = nil
+        rules.pause(light.id, until: nextSunEvent())
     }
 
     /// Follow again and re-apply right away, whatever the light shows now. A light showing an RGB
     /// colour goes back to white.
     func resume(_ light: Light) {
         now = .now
-        pausedUntil[light.id] = nil
-        deliveries[light.id] = nil
-        guard isEnabled, light.isReachable, light.isOn else { return }
-        send(target(for: light), to: light)
+        guard isEnabled, let target = rules.resume(light.state, kelvin: targetKelvin, brightness: brightnessShare, at: .now) else {
+            return
+        }
+        send(target, to: light)
     }
 
     func update() {
         now = .now
         guard isEnabled else { return }
-        for light in store.lights where light.isReachable {
-            guard light.isOn else {
-                deliveries[light.id] = nil // re-apply when it comes back on
-                continue
-            }
-            guard follows(light) else { continue }
-
-            if let delivery = deliveries[light.id], !Self.reports(light, match: delivery.expected) {
-                // The light reports something other than what was sent.
-                let isRecent = ContinuousClock.now - delivery.sentAt < .seconds(15)
-                if isRecent, !delivery.isRetry {
-                    send(delivery.target, to: light, isRetry: true) // probably lost on the way
-                } else if isRecent {
-                    // The light can't go there; accept its limit.
-                    deliveries[light.id]?.expected = Target(
-                        kelvin: light.kelvin, brightness: delivery.expected.brightness == nil ? nil : light.brightness
-                    )
-                } else {
-                    pause(light) // changed elsewhere, which counts as a manual change
-                }
-                continue
-            }
-
-            let target = target(for: light)
-            if let delivery = deliveries[light.id], !Self.hasMoved(from: delivery.target, to: target) { continue }
-            send(target, to: light)
+        var rules = self.rules
+        let sends = rules.update(
+            store.lights.map(\.state), kelvin: targetKelvin, brightness: brightnessShare,
+            now: now, instant: .now, nextSunEvent: nextSunEvent()
+        )
+        // Only real changes, or everything showing a pause would redraw every minute.
+        if rules != self.rules { self.rules = rules }
+        for (id, target) in sends {
+            if let light = store.light(id: id) { send(target, to: light) }
         }
     }
 
-    private func send(_ target: Target, to light: Light, isRetry: Bool = false) {
-        deliveries[light.id] = Delivery(target: target, expected: target, sentAt: .now, isRetry: isRetry)
+    private func send(_ target: AdaptiveRules.Target, to light: Light) {
         store.applyAdaptive(kelvin: target.kelvin, brightness: target.brightness, to: light)
     }
 
-    private func target(for light: Light) -> Target {
-        let kelvinRange = light.capabilities.kelvinRange
-        let kelvin = min(max(targetKelvin, kelvinRange.lowerBound), kelvinRange.upperBound)
-        guard adjustsBrightness else { return Target(kelvin: kelvin, brightness: nil) }
-
-        let limit = light.brightnessLimit
-        let brightness = Int((Double(limit) * Double(targetBrightness) / 100).rounded())
-        return Target(kelvin: kelvin, brightness: min(max(brightness, light.capabilities.brightnessRange.lowerBound), limit))
-    }
-
-    /// Elgato reports temperature in mireds, so Kelvin only round-trips to within a step.
-    private static func reports(_ light: Light, match expected: Target) -> Bool {
-        abs(light.kelvin - expected.kelvin) <= 100 && expected.brightness.map { abs(light.brightness - $0) <= 2 } ?? true
-    }
-
-    private static func hasMoved(from old: Target, to new: Target) -> Bool {
-        if abs(old.kelvin - new.kelvin) >= 50 { return true }
-        switch (old.brightness, new.brightness) {
-        case let (old?, new?): return abs(old - new) >= 2
-        case (nil, nil): return false
-        default: return true
-        }
-    }
-
-    func nextSunEvent() -> Date {
-        let today = place.sun.sunTimes(around: Self.noon(of: now))
-        let tomorrow = place.sun.sunTimes(around: Self.noon(of: now.addingTimeInterval(86_400)))
-        let events = [today?.sunrise, today?.sunset, tomorrow?.sunrise, tomorrow?.sunset].compactMap { $0 }
-        return events.filter { $0 > now }.min() ?? now.addingTimeInterval(12 * 3600)
+    private func nextSunEvent() -> Date {
+        place.sun.nextSunriseOrSunset(after: now)
     }
 
     // MARK: Location

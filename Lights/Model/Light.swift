@@ -137,6 +137,15 @@ final class Light: Identifiable {
         effect.flatMap { name in effects.first { $0.name == name }?.palette }.flatMap { $0.isEmpty ? nil : $0 }
     }
 
+    /// Snapshot for the rules in LightsKit.
+    var state: LightState {
+        LightState(
+            id: id, isReachable: isReachable, isOn: isOn, brightness: brightness, kelvin: kelvin, color: color, scene: effect,
+            brightnessRange: capabilities.brightnessRange, brightnessLimit: brightnessLimit, kelvinRange: capabilities.kelvinRange,
+            supportsColor: capabilities.supportsColor, scenes: effects.map(\.name)
+        )
+    }
+
     /// Called for every user edit so reports already in flight don't snap a slider back mid-drag.
     func noteLocalEdit() {
         lastLocalEdit = .now

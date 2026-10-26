@@ -49,6 +49,16 @@ public struct SunCalculator: Sendable {
         )
     }
 
+    /// The first sunrise or sunset after `date`, or 12 hours on during polar day or night.
+    /// `calendar` sets the local days the sun times belong to.
+    public func nextSunriseOrSunset(after date: Date, calendar: Calendar = .current) -> Date {
+        func noon(_ day: Date) -> Date { calendar.date(bySettingHour: 12, minute: 0, second: 0, of: day) ?? day }
+        let today = sunTimes(around: noon(date))
+        let tomorrow = sunTimes(around: noon(date.addingTimeInterval(86_400)))
+        let events = [today?.sunrise, today?.sunset, tomorrow?.sunrise, tomorrow?.sunset].compactMap { $0 }
+        return events.filter { $0 > date }.min() ?? date.addingTimeInterval(12 * 3600)
+    }
+
     private static func solarParameters(at date: Date) -> (equationOfTime: Double, declination: Double) {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
