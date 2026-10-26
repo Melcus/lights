@@ -11,9 +11,10 @@ enum DesignSnapshots {
         for scheme in [ColorScheme.light, .dark] {
             let sheet = HStack(alignment: .top, spacing: 24) {
                 ForEach(Array(samples().enumerated()), id: \.offset) { index, store in
-                    PanelView(openSettings: {})
+                    PanelView(openSettings: { _ in })
                         .environment(store)
                         .environment(adaptive(for: store, enabled: index < 2))
+                        .environment(presets(for: store))
                         .background(RoundedRectangle(cornerRadius: 26, style: .continuous).fill(platter(for: scheme)))
                 }
             }
@@ -26,11 +27,12 @@ enum DesignSnapshots {
     }
 
     /// The panel as it is now, with the real lights, rendered off screen.
-    static func renderLive(store: LightStore, adaptive: AdaptiveLighting, to directory: String) {
+    static func renderLive(store: LightStore, adaptive: AdaptiveLighting, presets: PresetStore, to directory: String) {
         for scheme in [ColorScheme.light, .dark] {
-            let panel = PanelView(openSettings: {})
+            let panel = PanelView(openSettings: { _ in })
                 .environment(store)
                 .environment(adaptive)
+                .environment(presets)
                 .background(RoundedRectangle(cornerRadius: 26, style: .continuous).fill(platter(for: scheme)))
                 .padding(24)
                 .background(backdrop(for: scheme))
@@ -62,7 +64,13 @@ enum DesignSnapshots {
         unpaired.pairing = .needed
         let trouble = store(lyra(isOn: false, brightness: 27, color: .white(kelvin: 2700)), unpaired)
         trouble.lights.first { $0.kind == .govee }?.availability = .offline
-        return [allOn, mixed, trouble, LightStore()]
+        // Matches the built-in Relax preset, which shows lit.
+        let relaxing = store(
+            keyLight(isOn: false, brightness: 30, kelvin: 4350),
+            lyra(isOn: true, brightness: 35, color: .white(kelvin: 2700)),
+            magrgb(isOn: true, brightness: 35, color: .white(kelvin: 2700))
+        )
+        return [allOn, mixed, relaxing, trouble, LightStore()]
     }
 
     /// Separate defaults so rendering never touches the real setting.
@@ -70,6 +78,13 @@ enum DesignSnapshots {
         let defaults = UserDefaults(suiteName: "ro.tirdea.Lights.snapshots")!
         defaults.set(enabled, forKey: "adaptive.enabled")
         return AdaptiveLighting(store: store, defaults: defaults)
+    }
+
+    /// The built-in presets, whatever the real ones are.
+    private static func presets(for store: LightStore) -> PresetStore {
+        let defaults = UserDefaults(suiteName: "ro.tirdea.Lights.snapshots")!
+        defaults.removeObject(forKey: "presets")
+        return PresetStore(store: store, defaults: defaults)
     }
 
     private static func store(_ lights: Light...) -> LightStore {
@@ -93,7 +108,7 @@ enum DesignSnapshots {
         return light
     }
 
-    private static func magrgb(isOn: Bool, color: Light.ReportedColor) -> Light {
+    private static func magrgb(isOn: Bool, brightness: Int = 64, color: Light.ReportedColor) -> Light {
         let light = Light(id: "sample-magrgb", kind: .nanoleaf, defaultName: "MAGRGB", model: "Secretlab MAGRGB (NL72S2)",
                           capabilities: .init(brightnessRange: 1...100, kelvinRange: 2127...6535, supportsColor: true))
         let scenes: [(String, [String])] = [
@@ -105,7 +120,7 @@ enum DesignSnapshots {
             ("Volume Up", ["FF00DD", "D400FF", "7F00FF", "1D00FF", "008CFF"]),
         ]
         light.effects = scenes.map { Light.Effect(name: $0.0, palette: $0.1.compactMap(RGB.init(hex:)), isRhythm: $0.0 == "Volume Up") }
-        light.applyReported(isOn: isOn, brightness: 64, color: color)
+        light.applyReported(isOn: isOn, brightness: brightness, color: color)
         return light
     }
 
@@ -127,21 +142,53 @@ enum DesignSnapshots {
 /// Commands: toggle, brightness, kelvin, color <id> <r> <g> <b>, scene <id> <name>, pair, forget,
 /// dump (writes state to /tmp/lights-state.json), settings <tab index>, close-settings,
 /// adaptive on|off, panel (opens or closes it), snapshot <directory> (renders the live panel),
-/// auto <light id> (the Auto pill), wedge-govee (breaks the Govee socket to exercise recovery) and
-/// nanoleaf-token <id> <file> (adopts a token a script obtained, then deletes the file).
+/// auto <light id> (the Auto pill), wedge-govee (breaks the Govee socket to exercise recovery),
+/// nanoleaf-token <id> <file> (adopts a token a script obtained, then deletes the file), and for
+/// presets: preset <name> (applies it), preset-save <name>, preset-delete <name> and presets
+/// (writes them to /tmp/lights-presets.json).
 enum DebugCommands {
-    static func install(store: LightStore, settings: SettingsWindowController, adaptive: AdaptiveLighting, togglePanel: @escaping @MainActor @Sendable () -> Void) {
+    static func install(
+        store: LightStore, settings: SettingsWindowController, adaptive: AdaptiveLighting, presets: PresetStore,
+        togglePanel: @escaping @MainActor @Sendable () -> Void
+    ) {
         DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("ro.tirdea.Lights.debug"), object: nil, queue: .main
         ) { notification in
             guard let command = notification.object as? String else { return }
             MainActor.assumeIsolated {
-                if command == "panel" { togglePanel() } else { run(command, store: store, settings: settings, adaptive: adaptive) }
+                if command == "panel" {
+                    togglePanel()
+                } else if command.hasPrefix("preset") {
+                    runPreset(command, store: store, presets: presets)
+                } else {
+                    run(command, store: store, settings: settings, adaptive: adaptive, presets: presets)
+                }
             }
         }
     }
 
-    private static func run(_ command: String, store: LightStore, settings: SettingsWindowController, adaptive: AdaptiveLighting) {
+    private static func runPreset(_ command: String, store: LightStore, presets: PresetStore) {
+        let parts = command.split(separator: " ", maxSplits: 1).map(String.init)
+        let name = parts.count > 1 ? parts[1] : ""
+        let preset = presets.presets.first { $0.displayName.caseInsensitiveCompare(name) == .orderedSame }
+        switch parts[0] {
+        case "preset": preset.map(presets.apply)
+        case "preset-save" where !name.isEmpty: presets.saveCurrentLights(named: name)
+        case "preset-delete": preset.map(presets.delete)
+        case "presets":
+            let state = presets.presets.map { preset in
+                ["id": preset.id.uuidString, "name": preset.displayName, "symbol": preset.symbol,
+                 "active": presets.isActive(preset), "lights": preset.summary(for: store.lights)] as [String: Any]
+            }
+            let data = try? JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys])
+            try? data?.write(to: URL(fileURLWithPath: "/tmp/lights-presets.json"))
+        default: break
+        }
+    }
+
+    private static func run(
+        _ command: String, store: LightStore, settings: SettingsWindowController, adaptive: AdaptiveLighting, presets: PresetStore
+    ) {
         let parts = command.split(separator: " ").map(String.init)
         switch parts.first {
         case "settings":
@@ -158,7 +205,7 @@ enum DebugCommands {
             store.simulateStuckGoveeSocket()
             return
         case "snapshot":
-            DesignSnapshots.renderLive(store: store, adaptive: adaptive, to: parts.count > 1 ? parts[1] : "/tmp")
+            DesignSnapshots.renderLive(store: store, adaptive: adaptive, presets: presets, to: parts.count > 1 ? parts[1] : "/tmp")
             return
         default:
             break

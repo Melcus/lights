@@ -5,10 +5,11 @@ A menu bar app for macOS 26+ that controls office lights: an Elgato Key Light Ne
 ## Features
 
 - **Menu bar panel**: each light gets a Control Center-style tile. The orb toggles it, capsule sliders set brightness and colour temperature, and colour lights get colour swatches. Nanoleaf lights also get a Scenes list with the scenes stored on the light, each previewed in its colours (scenes that react to sound are marked with a waveform). Tiles take on the colour each light is emitting.
-- **Menu bar icon**: click for the panel, Option-click to toggle every light, right-click for a quick menu. The icon shows whether any light is on.
+- **Presets**: one click sets every light, from the row at the top of the panel, the right-click menu or a shortcut. Lights starts with Call (desk light bright and neutral, the room soft and warm), Focus (bright neutral white), Relax (desk light off, the room dim and warm) and Gaming (desk light off, the room in colour). These go by what each light can show (white only or colour), so they suit any set of lights. To make your own, set the lights the way you like and click New in the panel; right-click a preset to update it to the current lights or delete it. Settings > Presets renames presets, changes their icons and order, chooses which lights each one sets and takes a single light's look from what it shows now. The preset the lights show right now is lit. Applying a preset counts as a change made by hand, so adaptive lighting pauses on the lights it sets.
+- **Menu bar icon**: click for the panel, Option-click to toggle every light, right-click for a quick menu with your presets. The icon shows whether any light is on.
 - **Adaptive lighting** (optional, off by default): like Night Shift for the lights. White lights follow the sun, daylight white while it is up and warming through sunset to a cosy white at night, then back at sunrise. Brightness can follow too (on by default once enabled): 50% of each light's maximum by day and 80% at night, so lights get brighter as it gets dark; flip the values to dim in the evening instead. Turn it on with the sun button in the panel, the menu, a shortcut or Settings > Adaptive, where the day and night values are set and today's curves are shown. Only lights that are on and showing white are adjusted (a light playing a scene is left alone), and lights are never switched on. Changing a light's brightness, colour temperature, colour or scene by hand, in Lights or anywhere else (Control Center, the Govee or Nanoleaf app, the light's own controls), pauses it until the next sunrise or sunset; clicking the "Auto" pill on its tile re-applies adaptive lighting straight away. Sun times come from your time zone's reference city, so no location permission is needed.
-- **Global shortcuts** (Settings > Shortcuts): toggle all, all on, all off, brighter, dimmer, toggle any single light, show the panel, toggle adaptive lighting. They use Carbon hot keys, so no Accessibility permission is needed.
-- **Settings**: open at login, adaptive lighting, rename lights, see connection details and firmware, pair or forget Nanoleaf lights.
+- **Global shortcuts** (Settings > Shortcuts): toggle all, all on, all off, brighter, dimmer, toggle any single light, apply any preset, show the panel, toggle adaptive lighting. They use Carbon hot keys, so no Accessibility permission is needed.
+- **Settings**: open at login, adaptive lighting, presets, rename lights, see connection details and firmware, pair or forget Nanoleaf lights.
 - **Live state**: changes made elsewhere (Elgato Control Center, the Govee or Nanoleaf app, the lights' own buttons) show up within seconds.
 
 ## Supported lights
@@ -53,15 +54,15 @@ Other targets: `make run` (debug build), `make test` (protocol tests), `make sna
 ```
 Lights/              App target (MainActor by default)
   App/               Entry point, menu bar status item, glass panel, debug tools
-  Model/             Light, LightStore (optimistic updates, throttling), Throttle
+  Model/             Light, LightStore (optimistic updates, throttling), AdaptiveLighting, PresetStore, Throttle
   Devices/           ElgatoUSBService (IOKit HID), GoveeLANService (UDP), NanoleafService (Bonjour, HTTP), Keychain
   Shortcuts/         Shortcut model, Carbon hot keys, persistence
   UI/                Panel views, capsule slider, colours
   Settings/          Settings window and recorder
-LightsKit/           Swift package with the protocol code and its tests
+LightsKit/           Swift package with the protocol code, the adaptive lighting and preset rules, and their tests
 docs/PROTOCOLS.md    Device protocols and reverse-engineering notes
 ```
 
-`LightsKit` holds the wire formats with no UI or I/O, so `make test` runs in seconds. The Elgato fixtures are bytes captured from a real Key Light Neo.
+`LightsKit` holds the wire formats and the rules behind adaptive lighting and presets, with no UI or I/O, so `make test` runs in seconds. The Elgato fixtures are bytes captured from a real Key Light Neo.
 
 Debug builds also accept scripted commands for end-to-end checks, for example `toggle <light id>`, `scene <light id> <name>`, `dump` or `snapshot <directory>` (renders the live panel off screen), posted as a `ro.tirdea.Lights.debug` distributed notification. See `Lights/App/DebugTools.swift`.

@@ -3,9 +3,16 @@ import SwiftUI
 
 /// Standard preferences window with toolbar tabs, each hosting a SwiftUI form.
 final class SettingsWindowController: NSWindowController {
-    init(store: LightStore, shortcuts: ShortcutCenter, adaptive: AdaptiveLighting) {
+    /// In toolbar order.
+    enum Tab: Int {
+        case general, adaptive, presets, shortcuts, lights
+    }
+
+    init(store: LightStore, shortcuts: ShortcutCenter, adaptive: AdaptiveLighting, presets: PresetStore) {
         func tab(_ title: String, symbol: String, _ content: some View) -> NSTabViewItem {
-            let controller = NSHostingController(rootView: content.environment(store).environment(shortcuts).environment(adaptive))
+            let controller = NSHostingController(
+                rootView: content.environment(store).environment(shortcuts).environment(adaptive).environment(presets)
+            )
             controller.sizingOptions = .preferredContentSize
             controller.title = title // shown as the window title while the tab is selected
             let item = NSTabViewItem(viewController: controller)
@@ -18,6 +25,7 @@ final class SettingsWindowController: NSWindowController {
         tabs.tabStyle = .toolbar
         tabs.addTabViewItem(tab("General", symbol: "gearshape", GeneralSettingsView()))
         tabs.addTabViewItem(tab("Adaptive", symbol: "sun.horizon", AdaptiveSettingsView()))
+        tabs.addTabViewItem(tab("Presets", symbol: "square.grid.2x2", PresetsSettingsView()))
         tabs.addTabViewItem(tab("Shortcuts", symbol: "command", ShortcutsSettingsView()))
         tabs.addTabViewItem(tab("Lights", symbol: "lightbulb", LightsSettingsView()))
 
@@ -33,8 +41,10 @@ final class SettingsWindowController: NSWindowController {
         fatalError("init(coder:) is not supported")
     }
 
-    func show() {
+    /// Opens on `tab`, or on the tab last shown.
+    func show(tab: Tab? = nil) {
         guard let window else { return }
+        if let tab { (contentViewController as? NSTabViewController)?.selectedTabViewItemIndex = tab.rawValue }
         if !window.isVisible { window.center() }
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)

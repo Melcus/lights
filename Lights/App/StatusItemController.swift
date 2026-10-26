@@ -1,4 +1,5 @@
 import AppKit
+import LightsKit
 import Observation
 import SwiftUI
 
@@ -6,16 +7,20 @@ import SwiftUI
 final class StatusItemController: NSObject {
     private let store: LightStore
     private let adaptive: AdaptiveLighting
-    private let openSettings: () -> Void
+    private let presets: PresetStore
+    private let openSettings: (SettingsWindowController.Tab?) -> Void
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let panel: GlassPanel
     private var outsideClickMonitor: Any?
 
-    init(store: LightStore, adaptive: AdaptiveLighting, openSettings: @escaping () -> Void) {
+    init(store: LightStore, adaptive: AdaptiveLighting, presets: PresetStore, openSettings: @escaping (SettingsWindowController.Tab?) -> Void) {
         self.store = store
         self.adaptive = adaptive
+        self.presets = presets
         self.openSettings = openSettings
-        panel = GlassPanel(rootView: PanelView(openSettings: openSettings).environment(store).environment(adaptive))
+        panel = GlassPanel(
+            rootView: PanelView(openSettings: openSettings).environment(store).environment(adaptive).environment(presets)
+        )
         super.init()
 
         panel.onClose = { [weak self] in self?.panelDidClose() }
@@ -104,6 +109,20 @@ final class StatusItemController: NSObject {
             menu.addItem(item)
         }
 
+        if !presets.presets.isEmpty {
+            menu.addItem(.separator())
+            menu.addItem(.sectionHeader(title: "Presets"))
+        }
+        for preset in presets.presets {
+            let item = NSMenuItem(title: preset.displayName, action: #selector(menuApplyPreset(_:)), keyEquivalent: "")
+            item.target = self
+            item.image = NSImage(systemSymbolName: preset.symbol, accessibilityDescription: nil)
+            item.state = presets.isActive(preset) ? .on : .off
+            item.isEnabled = !store.reachableLights.isEmpty
+            item.representedObject = preset.id
+            menu.addItem(item)
+        }
+
         menu.addItem(.separator())
         let adaptiveItem = NSMenuItem(title: "Adaptive Lighting", action: #selector(menuToggleAdaptive), keyEquivalent: "")
         adaptiveItem.target = self
@@ -130,11 +149,16 @@ final class StatusItemController: NSObject {
         store.toggle(light)
     }
 
+    @objc private func menuApplyPreset(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID, let preset = presets.preset(id: id) else { return }
+        presets.apply(preset)
+    }
+
     @objc private func menuToggleAdaptive() {
         adaptive.isEnabled.toggle()
     }
 
     @objc private func menuSettings() {
-        openSettings()
+        openSettings(nil)
     }
 }

@@ -33,15 +33,42 @@ extension RGB {
         let (low, high) = (stops[upper - 1], stops[upper])
         return low.color.mixed(with: high.color, amount: Double(kelvin - low.kelvin) / Double(high.kelvin - low.kelvin))
     }
+
+    /// Accent for a colour a light emits. RGB white is a cool white, tinted like one so it shows on
+    /// light glass.
+    var accent: RGB {
+        hueSaturation.saturation < 8 ? .tint(kelvin: 6500) : mixed(with: .white, amount: 0.15)
+    }
 }
 
 extension Light {
     /// Accent reflecting what the light emits: its RGB colour, its scene's first colour, or its
-    /// white temperature. RGB white is a cool white, tinted like one so it shows on light glass.
+    /// white temperature.
     var tint: Color {
         let emitted = color ?? effectPalette?.first { max($0.r, $0.g, $0.b) > 60 }
-        if let emitted, emitted.hueSaturation.saturation < 8 { return Color(RGB.tint(kelvin: 6500)) }
-        return Color(emitted.map { $0.mixed(with: .white, amount: 0.15) } ?? .tint(kelvin: kelvin))
+        return Color(emitted?.accent ?? .tint(kelvin: kelvin))
+    }
+}
+
+extension Preset {
+    /// Accent for the preset's button: its first colour or scene, else its first white.
+    func tint(for lights: [Light]) -> Color {
+        let looks = lights.compactMap { look(for: $0.state) } + [colorLights, whiteLights].compactMap { $0 }
+        for look in looks {
+            switch look {
+            case .color(_, let rgb):
+                return Color(rgb.accent)
+            case .scene(_, let name):
+                let palette = lights.lazy.compactMap { $0.effects.first { $0.name == name }?.palette }.first
+                if let bright = palette?.first(where: { max($0.r, $0.g, $0.b) > 60 }) { return Color(bright.accent) }
+            case .off, .white:
+                continue
+            }
+        }
+        for case .white(_, let kelvin) in looks {
+            return Color(RGB.tint(kelvin: kelvin))
+        }
+        return Color.primary.opacity(0.35) // everything off
     }
 }
 

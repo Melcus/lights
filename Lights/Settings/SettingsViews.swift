@@ -1,3 +1,4 @@
+import LightsKit
 import ServiceManagement
 import SwiftUI
 
@@ -44,6 +45,7 @@ struct GeneralSettingsView: View {
 struct ShortcutsSettingsView: View {
     @Environment(LightStore.self) private var store
     @Environment(ShortcutCenter.self) private var shortcuts
+    @Environment(PresetStore.self) private var presets
 
     var body: some View {
         Form {
@@ -70,6 +72,15 @@ struct ShortcutsSettingsView: View {
                 }
                 ForEach(disconnectedLightActions, id: \.self) { action in
                     ShortcutRow(title: "Toggle a disconnected light", subtitle: action.lightID, action: action)
+                }
+            }
+            Section("Presets") {
+                if presets.presets.isEmpty {
+                    Text("Presets appear here once you have some.")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(presets.presets) { preset in
+                    ShortcutRow(title: preset.displayName, action: .applyPreset(preset.id))
                 }
             }
             Section("App") {

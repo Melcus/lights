@@ -84,7 +84,7 @@ struct Shortcut: Codable, Hashable {
     ]
 }
 
-/// What a shortcut does. Per-light toggles embed the light's ID.
+/// What a shortcut does. Per-light toggles embed the light's ID, presets the preset's.
 struct ShortcutAction: Hashable, RawRepresentable {
     var rawValue: String
 
@@ -100,5 +100,11 @@ struct ShortcutAction: Hashable, RawRepresentable {
 
     var lightID: String? {
         rawValue.hasPrefix("toggle:") ? String(rawValue.dropFirst("toggle:".count)) : nil
+    }
+
+    static func applyPreset(_ presetID: UUID) -> ShortcutAction { ShortcutAction(rawValue: "preset:" + presetID.uuidString) }
+
+    var presetID: UUID? {
+        rawValue.hasPrefix("preset:") ? UUID(uuidString: String(rawValue.dropFirst("preset:".count))) : nil
     }
 }

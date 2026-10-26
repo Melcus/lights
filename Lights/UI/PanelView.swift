@@ -4,7 +4,8 @@ import SwiftUI
 /// Content of the menu bar panel. The glass itself is drawn by `GlassPanel`.
 struct PanelView: View {
     @Environment(LightStore.self) private var store
-    let openSettings: () -> Void
+    /// nil opens the tab shown last.
+    let openSettings: (SettingsWindowController.Tab?) -> Void
 
     var body: some View {
         VStack(spacing: 10) {
@@ -12,11 +13,12 @@ struct PanelView: View {
             if store.lights.isEmpty {
                 SearchingCard()
             } else {
+                PresetBar { openSettings(.presets) }
                 ForEach(store.lights) { light in
                     LightTile(light: light)
                 }
             }
-            PanelFooter(openSettings: openSettings)
+            PanelFooter { openSettings(nil) }
         }
         .padding(10)
         .frame(width: 320)
