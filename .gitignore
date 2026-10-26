@@ -1,0 +1,6 @@
+build/
+LightsKit/.build/
+LightsKit/.swiftpm/
+xcuserdata/
+*.xcuserstate
+.DS_Store
